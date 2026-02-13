@@ -3,6 +3,7 @@ import { loadTopology, renderMap, updateMapColors } from './map';
 import './style.css';
 
 const TOTAL_SECONDS = 15 * 60; // 15 minutos
+const SCORES_KEY = 'quiz_scores_history';
 
 const app = document.getElementById('app')!;
 let timerInterval: number | null = null;
@@ -10,6 +11,37 @@ let secondsLeft = TOTAL_SECONDS;
 const discoveredIds = new Set<string>();
 let isPaused = false;
 let mapSvgEl: SVGSVGElement | null = null;
+
+interface ScoreRecord {
+  score: number;
+  date: string;
+}
+
+// Obter histórico de pontuações
+function getScoresHistory(): ScoreRecord[] {
+  const saved = localStorage.getItem(SCORES_KEY);
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch (e) {
+      console.error('Erro ao carregar histórico:', e);
+    }
+  }
+  return [];
+}
+
+// Salvar nova pontuação no histórico
+function saveScore(score: number) {
+  const history = getScoresHistory();
+  const today = new Date().toLocaleDateString('pt-BR');
+  history.push({ score, date: today });
+  // Manter apenas as 10 melhores pontuações
+  history.sort((a, b) => b.score - a.score);
+  localStorage.setItem(SCORES_KEY, JSON.stringify(history.slice(0, 10)));
+}
+
+// Nota: Os dados de países descobertos NÃO são salvos.
+// Cada sessão começa do zero quando a página é recarregada.
 
 function normalizeForMatch(s: string): string {
   return s
@@ -47,6 +79,7 @@ function startTimer() {
       stopTimer();
       const input = document.getElementById('input-country') as HTMLInputElement | null;
       if (input) input.disabled = true;
+      endGame();
     }
   }, 1000);
 }
@@ -82,7 +115,9 @@ function getCountriesByContinent(): Map<Continent, Country[]> {
 
 function updateListByContinent(listEl: HTMLElement, countEl: HTMLElement) {
   const byContinent = getCountriesByContinent();
-  listEl.innerHTML = CONTINENTS_ORDER.map((cont) => {
+  
+  // Helper to create continent block HTML
+  const createContinentBlock = (cont: Continent) => {
     const list = byContinent.get(cont) ?? [];
     if (list.length === 0) return '';
     const items = list
@@ -92,7 +127,29 @@ function updateListByContinent(listEl: HTMLElement, countEl: HTMLElement) {
       })
       .join('');
     return `<section class="continent-block"><h3>${cont}</h3><ul>${items}</ul></section>`;
-  }).join('');
+  };
+  
+  // Build HTML with Americas grouped in a wrapper
+  const htmlParts: string[] = [];
+  
+  for (const cont of CONTINENTS_ORDER) {
+    if (cont === 'América do Norte') {
+      // Start wrapper for Americas (North America and Central America & Caribbean)
+      const northBlock = createContinentBlock('América do Norte');
+      const centralBlock = createContinentBlock('América Central e Caribe');
+      if (northBlock || centralBlock) {
+        htmlParts.push(
+          `<div class="americas-wrapper">${northBlock}${centralBlock}</div>`
+        );
+      }
+    } else if (cont !== 'América Central e Caribe') {
+      // Skip America Central e Caribe since it's grouped with North America
+      const block = createContinentBlock(cont);
+      if (block) htmlParts.push(block);
+    }
+  }
+  
+  listEl.innerHTML = htmlParts.join('');
   countEl.textContent = String(discoveredIds.size);
 }
 
@@ -112,8 +169,14 @@ function resetGame() {
   const countEl = document.getElementById('count');
   if (listByContinent && countEl) updateListByContinent(listByContinent, countEl);
   if (mapSvgEl) updateMapColors(mapSvgEl, discoveredIds);
+  const gameOverOverlay = document.getElementById('game-over-overlay');
+  if (gameOverOverlay) gameOverOverlay.classList.add('hidden');
+  const gameContent = document.getElementById('game-content');
+  const gameHeader = document.getElementById('game-header');
+  if (gameContent) gameContent.classList.remove('hidden');
+  if (gameHeader) gameHeader.classList.remove('hidden');
 }
-
+  
 function showPauseScreen() {
   const overlay = document.getElementById('pause-overlay');
   const gameContent = document.getElementById('game-content');
@@ -130,6 +193,30 @@ function hidePauseScreen() {
   if (overlay) overlay.classList.add('hidden');
   if (gameContent) gameContent.classList.remove('hidden');
   if (gameHeader) gameHeader.classList.remove('hidden');
+}
+
+function endGame() {
+  const gameOverOverlay = document.getElementById('game-over-overlay');
+  const gameContent = document.getElementById('game-content');
+  const gameHeader = document.getElementById('game-header');
+  if (gameOverOverlay) gameOverOverlay.classList.remove('hidden');
+  if (gameContent) gameContent.classList.add('hidden');
+  if (gameHeader) gameHeader.classList.add('hidden');
+  
+  // Salvar pontuação atual
+  saveScore(discoveredIds.size);
+  
+  // Gerar HTML do ranking
+  const scores = getScoresHistory();
+  const rankingHTML = scores
+    .map((record, idx) => `<li class="rank-item"><span class="rank-pos">#${idx + 1}</span><span class="rank-score">${record.score}/${COUNTRIES.length}</span><span class="rank-date">${record.date}</span></li>`)
+    .join('');
+  
+  const rankingList = document.getElementById('ranking-list');
+  if (rankingList) rankingList.innerHTML = rankingHTML;
+  
+  const finalScore = document.getElementById('final-score');
+  if (finalScore) finalScore.textContent = String(discoveredIds.size);
 }
 
 async function init() {
@@ -160,7 +247,10 @@ async function init() {
     <div class="top-section">
       <div class="input-section">
         <label for="input-country">Digite o nome do país (em português)</label>
-        <input type="text" id="input-country" autocomplete="off" />
+        <div class="input-wrapper">
+          <input type="text" id="input-country" autocomplete="off" />
+          <div id="check-mark" class="check-mark hidden">✓</div>
+        </div>
         <p id="feedback" class="feedback"></p>
       </div>
       <div id="tooltip" class="tooltip hidden" aria-hidden="true"></div>
@@ -191,9 +281,26 @@ async function init() {
   `;
   app.appendChild(pauseOverlay);
 
+  const gameOverOverlay = document.createElement('div');
+  gameOverOverlay.id = 'game-over-overlay';
+  gameOverOverlay.className = 'game-over-overlay hidden';
+  gameOverOverlay.innerHTML = `
+    <div class="game-over-card">
+      <h2>Tempo Esgotado!</h2>
+      <p class="final-score-text">Sua pontuação: <span id="final-score">0</span>/${COUNTRIES.length}</p>
+      <div class="ranking-section">
+        <h3>Melhores Pontuações</h3>
+        <ul id="ranking-list" class="ranking-list"></ul>
+      </div>
+      <button type="button" id="btn-play-again" class="btn btn-primary">Jogar Novamente</button>
+    </div>
+  `;
+  app.appendChild(gameOverOverlay);
+
   const input = document.getElementById('input-country') as HTMLInputElement;
   const feedback = document.getElementById('feedback')!;
   const tooltip = document.getElementById('tooltip')!;
+  const checkMark = document.getElementById('check-mark')!;
   const listByContinent = document.getElementById('list-by-continent')!;
   const countEl = document.getElementById('count')!;
   const mapSvg = document.getElementById('map-svg');
@@ -204,10 +311,26 @@ async function init() {
   const btnUnpause = document.getElementById('btn-unpause');
   const btnRestart = document.getElementById('btn-restart');
   const btnRestartHeader = document.getElementById('btn-restart-header');
+  const btnPlayAgain = document.getElementById('btn-play-again');
+  
+  // Mostrar check mark temporariamente
+  function showCheckMark() {
+    checkMark.classList.remove('hidden');
+    checkMark.classList.add('bounce');
+    setTimeout(() => {
+      checkMark.classList.add('hidden');
+      checkMark.classList.remove('bounce');
+    }, 1500);
+  }
 
   function showFeedback(msg: string, isError = false) {
-    feedback.textContent = msg;
-    feedback.className = 'feedback ' + (isError ? 'error' : 'success');
+    if (isError) {
+      feedback.textContent = msg;
+      feedback.className = 'feedback error';
+    } else {
+      feedback.textContent = '';
+      feedback.className = 'feedback';
+    }
   }
 
   const { resetZoom } = renderMap(mapSvgEl, COUNTRIES, discoveredIds, (info) => {
@@ -218,29 +341,47 @@ async function init() {
 
   document.getElementById('btn-reset-map')?.addEventListener('click', () => resetZoom());
 
+  // Função auxiliar para processar input de país
+  function processCountryInput() {
+    if (isPaused) return;
+    startTimer();
+    const value = input.value.trim();
+    if (!value) return;
+    
+    const country = findCountryByInput(value);
+    if (!country) {
+      // Silenciosamente ignora entrada inválida - sem mostrar mensagem
+      return;
+    }
+    if (discoveredIds.has(country.id)) {
+      showFeedback(`${country.name} já foi descoberto!`, true);
+      return;
+    }
+    discoveredIds.add(country.id);
+    showCheckMark();
+    input.value = '';
+    updateListByContinent(listByContinent, countEl);
+    updateMapColors(mapSvgEl!, discoveredIds);
+  }
+
+  // Debounce para auto-aceitar após digitar
+  let inputTimeout: number | null = null;
+  input.addEventListener('input', () => {
+    if (inputTimeout !== null) {
+      clearTimeout(inputTimeout);
+    }
+    inputTimeout = window.setTimeout(() => {
+      processCountryInput();
+    }, 800); // Aguarda 800ms de inatividade antes de processar
+  });
+
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      if (isPaused) return;
-      startTimer();
-      const value = input.value.trim();
-      if (!value) {
-        showFeedback('Digite o nome de um país.', true);
-        return;
+      if (inputTimeout !== null) {
+        clearTimeout(inputTimeout);
+        inputTimeout = null;
       }
-      const country = findCountryByInput(value);
-      if (!country) {
-        showFeedback('País não encontrado. Tente outro nome.', true);
-        return;
-      }
-      if (discoveredIds.has(country.id)) {
-        showFeedback(`${country.name} já foi descoberto!`, true);
-        return;
-      }
-      discoveredIds.add(country.id);
-      showFeedback(`Correto! ${country.name} ✓`);
-      input.value = '';
-      updateListByContinent(listByContinent, countEl);
-      updateMapColors(mapSvgEl!, discoveredIds);
+      processCountryInput();
     }
   });
 
@@ -267,6 +408,10 @@ async function init() {
   btnRestartHeader?.addEventListener('click', () => {
     resetGame();
     hidePauseScreen();
+  });
+
+  btnPlayAgain?.addEventListener('click', () => {
+    resetGame();
   });
 
   updateListByContinent(listByContinent, countEl);
