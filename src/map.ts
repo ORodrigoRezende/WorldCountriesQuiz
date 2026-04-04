@@ -74,6 +74,7 @@ export function renderMap(
     .data(geos.features)
     .join('path')
     .attr('d', (d) => pathGenerator(d as never) ?? '')
+    .attr('data-id', (d) => getCountryId(d))
     .attr('fill', (d) => color(d))
     .attr('stroke', '#1e293b')
     .attr('stroke-width', 0.3)

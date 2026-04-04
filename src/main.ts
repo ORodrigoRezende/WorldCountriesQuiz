@@ -2,7 +2,7 @@ import { COUNTRIES, CONTINENTS_ORDER, type Country, type Continent } from './dat
 import { loadTopology, renderMap, updateMapColors } from './map';
 import './style.css';
 
-const TOTAL_SECONDS = 15 * 60; // 15 minutos
+const TOTAL_SECONDS = 12 * 60; // 12 minutos
 const SCORES_KEY = 'quiz_scores_history';
 
 const app = document.getElementById('app')!;
@@ -11,6 +11,7 @@ let secondsLeft = TOTAL_SECONDS;
 const discoveredIds = new Set<string>();
 let isPaused = false;
 let mapSvgEl: SVGSVGElement | null = null;
+let gameStarted = false;
 
 interface ScoreRecord {
   score: number;
@@ -70,6 +71,14 @@ function formatTime(seconds: number): string {
 
 function startTimer() {
   if (timerInterval != null || isPaused) return;
+  // Mostrar botões quando o jogo começa
+  if (!gameStarted) {
+    gameStarted = true;
+    const btnRestartHeader = document.getElementById('btn-restart-header');
+    const btnGiveUp = document.getElementById('btn-give-up');
+    if (btnRestartHeader) btnRestartHeader.classList.remove('hidden');
+    if (btnGiveUp) btnGiveUp.classList.remove('hidden');
+  }
   const el = document.getElementById('timer');
   if (!el) return;
   timerInterval = window.setInterval(() => {
@@ -129,24 +138,12 @@ function updateListByContinent(listEl: HTMLElement, countEl: HTMLElement) {
     return `<section class="continent-block"><h3>${cont}</h3><ul>${items}</ul></section>`;
   };
   
-  // Build HTML with Americas grouped in a wrapper
+  // Build HTML
   const htmlParts: string[] = [];
   
   for (const cont of CONTINENTS_ORDER) {
-    if (cont === 'América do Norte') {
-      // Start wrapper for Americas (North America and Central America & Caribbean)
-      const northBlock = createContinentBlock('América do Norte');
-      const centralBlock = createContinentBlock('América Central e Caribe');
-      if (northBlock || centralBlock) {
-        htmlParts.push(
-          `<div class="americas-wrapper">${northBlock}${centralBlock}</div>`
-        );
-      }
-    } else if (cont !== 'América Central e Caribe') {
-      // Skip America Central e Caribe since it's grouped with North America
-      const block = createContinentBlock(cont);
-      if (block) htmlParts.push(block);
-    }
+    const block = createContinentBlock(cont);
+    if (block) htmlParts.push(block);
   }
   
   listEl.innerHTML = htmlParts.join('');
@@ -158,6 +155,11 @@ function resetGame() {
   secondsLeft = TOTAL_SECONDS;
   discoveredIds.clear();
   isPaused = false;
+  gameStarted = false;
+  const btnRestartHeader = document.getElementById('btn-restart-header');
+  const btnGiveUp = document.getElementById('btn-give-up');
+  if (btnRestartHeader) btnRestartHeader.classList.add('hidden');
+  if (btnGiveUp) btnGiveUp.classList.add('hidden');
   const timerEl = document.getElementById('timer');
   if (timerEl) timerEl.textContent = formatTime(secondsLeft);
   const input = document.getElementById('input-country') as HTMLInputElement | null;
@@ -171,10 +173,6 @@ function resetGame() {
   if (mapSvgEl) updateMapColors(mapSvgEl, discoveredIds);
   const gameOverOverlay = document.getElementById('game-over-overlay');
   if (gameOverOverlay) gameOverOverlay.classList.add('hidden');
-  const gameContent = document.getElementById('game-content');
-  const gameHeader = document.getElementById('game-header');
-  if (gameContent) gameContent.classList.remove('hidden');
-  if (gameHeader) gameHeader.classList.remove('hidden');
 }
   
 function showPauseScreen() {
@@ -195,16 +193,22 @@ function hidePauseScreen() {
   if (gameHeader) gameHeader.classList.remove('hidden');
 }
 
-function endGame() {
-  const gameOverOverlay = document.getElementById('game-over-overlay');
-  const gameContent = document.getElementById('game-content');
-  const gameHeader = document.getElementById('game-header');
-  if (gameOverOverlay) gameOverOverlay.classList.remove('hidden');
-  if (gameContent) gameContent.classList.add('hidden');
-  if (gameHeader) gameHeader.classList.add('hidden');
+function endGame(isGiveUp: boolean = false) {
+  stopTimer();
+  const input = document.getElementById('input-country') as HTMLInputElement | null;
+  if (input) input.disabled = true;
   
-  // Salvar pontuação atual
+  const gameOverOverlay = document.getElementById('game-over-overlay');
+  if (gameOverOverlay) gameOverOverlay.classList.remove('hidden');
+  
+  // Salvar pontuação
   saveScore(discoveredIds.size);
+  
+  // Atualizar título do game-over
+  const gameOverTitle = document.querySelector('.game-over-card h2');
+  if (gameOverTitle) {
+    gameOverTitle.textContent = isGiveUp ? 'Você Desistiu!' : 'Tempo Esgotado!';
+  }
   
   // Gerar HTML do ranking
   const scores = getScoresHistory();
@@ -217,6 +221,37 @@ function endGame() {
   
   const finalScore = document.getElementById('final-score');
   if (finalScore) finalScore.textContent = String(discoveredIds.size);
+  
+  // Mostrar países não descobertos na tabela existente se desistiu
+  if (isGiveUp) {
+    const listByContinent = document.getElementById('list-by-continent');
+    if (listByContinent) {
+      const byContinent = new Map<Continent, Country[]>();
+      for (const c of COUNTRIES) {
+        const list = byContinent.get(c.continent) ?? [];
+        list.push(c);
+        byContinent.set(c.continent, list);
+      }
+      
+      const htmlParts: string[] = [];
+      for (const cont of CONTINENTS_ORDER) {
+        const list = byContinent.get(cont) ?? [];
+        if (list.length === 0) continue;
+        const items = list
+          .map((c) => {
+            const discovered = discoveredIds.has(c.id);
+            if (discovered) {
+              return `<li class="discovered">${c.name}</li>`;
+            } else {
+              return `<li class="missed">${c.name}</li>`;
+            }
+          })
+          .join('');
+        htmlParts.push(`<section class="continent-block"><h3>${cont}</h3><ul>${items}</ul></section>`);
+      }
+      listByContinent.innerHTML = htmlParts.join('');
+    }
+  }
 }
 
 async function init() {
@@ -234,7 +269,8 @@ async function init() {
         <span class="timer-label">Tempo restante</span>
         <span id="timer" class="timer">${formatTime(secondsLeft)}</span>
       </div>
-      <button type="button" id="btn-restart-header" class="btn btn-secondary">Recomeçar</button>
+      <button type="button" id="btn-restart-header" class="btn btn-secondary hidden">Recomeçar</button>
+      <button type="button" id="btn-give-up" class="btn btn-danger hidden">Desistir</button>
       <button type="button" id="btn-pause" class="btn btn-pause">Pausar</button>
     </div>
   `;
@@ -286,6 +322,7 @@ async function init() {
   gameOverOverlay.className = 'game-over-overlay hidden';
   gameOverOverlay.innerHTML = `
     <div class="game-over-card">
+      <button type="button" id="btn-close-ranking" class="close-btn" title="Fechar">✕</button>
       <h2>Tempo Esgotado!</h2>
       <p class="final-score-text">Sua pontuação: <span id="final-score">0</span>/${COUNTRIES.length}</p>
       <div class="ranking-section">
@@ -296,6 +333,8 @@ async function init() {
     </div>
   `;
   app.appendChild(gameOverOverlay);
+
+
 
   const input = document.getElementById('input-country') as HTMLInputElement;
   const feedback = document.getElementById('feedback')!;
@@ -312,6 +351,8 @@ async function init() {
   const btnRestart = document.getElementById('btn-restart');
   const btnRestartHeader = document.getElementById('btn-restart-header');
   const btnPlayAgain = document.getElementById('btn-play-again');
+  const btnGiveUp = document.getElementById('btn-give-up');
+  const btnCloseRanking = document.getElementById('btn-close-ranking');
   
   // Mostrar check mark temporariamente
   function showCheckMark() {
@@ -341,6 +382,13 @@ async function init() {
 
   document.getElementById('btn-reset-map')?.addEventListener('click', () => resetZoom());
 
+  btnGiveUp?.addEventListener('click', () => {
+    if (isPaused) return;
+    if (confirm('Tem certeza que quer desistir?')) {
+      endGame(true);
+    }
+  });
+
   // Função auxiliar para processar input de país
   function processCountryInput() {
     if (isPaused) return;
@@ -364,23 +412,13 @@ async function init() {
     updateMapColors(mapSvgEl!, discoveredIds);
   }
 
-  // Debounce para auto-aceitar após digitar
-  let inputTimeout: number | null = null;
+  // Processar imediatamente ao digitar
   input.addEventListener('input', () => {
-    if (inputTimeout !== null) {
-      clearTimeout(inputTimeout);
-    }
-    inputTimeout = window.setTimeout(() => {
-      processCountryInput();
-    }, 800); // Aguarda 800ms de inatividade antes de processar
+    processCountryInput();
   });
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      if (inputTimeout !== null) {
-        clearTimeout(inputTimeout);
-        inputTimeout = null;
-      }
       processCountryInput();
     }
   });
@@ -412,6 +450,14 @@ async function init() {
 
   btnPlayAgain?.addEventListener('click', () => {
     resetGame();
+  });
+
+  btnCloseRanking?.addEventListener('click', () => {
+    // Fechar o popup e mostrar a lista de países
+    const gameOverOverlay = document.getElementById('game-over-overlay');
+    if (gameOverOverlay) {
+      gameOverOverlay.classList.add('hidden');
+    }
   });
 
   updateListByContinent(listByContinent, countEl);
